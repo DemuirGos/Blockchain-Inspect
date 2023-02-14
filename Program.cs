@@ -25,6 +25,7 @@ namespace NethereumSample
         static ConcurrentDictionary<BigInteger, bool> HandledBlocks = new();
         static async Task Main(string[] args)
         {
+            int startBatch = args.Length > 0 ? int.Parse(args[0]) : 0;
             try {
                 FailedBlocks = new ConcurrentBag<BigInteger>(File.ReadAllLines("error.txt").Select(BigInteger.Parse).ToList());
                 File.ReadAllLines("handled.txt").Select(line => line.Split('-')).ToList()
@@ -37,7 +38,7 @@ namespace NethereumSample
             int len = BlockchainHeight / batchSize;
 
             var AnyEofsFound = false;
-            for(int i = 0; !AnyEofsFound && i < len; i++) {
+            for(int i = startBatch; !AnyEofsFound && i < len; i++) {
                 var start = i * batchSize;
                 var end = (i + 1) * batchSize;
                 AnyEofsFound = await IsThereAnyEofInBlock(start, end, StartWithEofPrefixTx);
@@ -50,7 +51,7 @@ namespace NethereumSample
                 do {
                     index ??= (FailedBlocks.Count - 1); 
                     var block = FailedBlocks.ElementAt(index.Value);
-                    var result = await HandleBlockNumber(block, StartWithEofPrefixTx);
+                    var result = await HandleBlockNumber(block, StartWithEofPrefixTx, true);
                     if(result is null) {
                         continue;
                     }
@@ -68,12 +69,12 @@ namespace NethereumSample
             }
         }
 
-        static async Task<bool?> HandleBlockNumber(BigInteger i, Func<byte[], bool> Check) {
+        static async Task<bool?> HandleBlockNumber(BigInteger i, Func<byte[], bool> Check, bool force = false) {
             if(HandledBlocks.ContainsKey(i)) {
                 return HandledBlocks[i];
             }
 
-            if(FailedBlocks.Contains(i)) {
+            if(!force && FailedBlocks.Contains(i)) {
                 Console.WriteLine("Skipping block: " + i);
                 return null;
             }
@@ -84,12 +85,20 @@ namespace NethereumSample
             var TxReceipts = await Task.WhenAll(
                 block.Transactions
                     .Select(tx => web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(tx.TransactionHash)).ToArray()); // get the receipt of the create transaction
+            
+            TxReceipts.ToList().ForEach(r => {
+                File.AppendAllTextAsync("receipts.txt",
+                    $"Block: {i} Tx: {r.TransactionHash} Contract: {r.ContractAddress} Status: {r.Status.Value} GasUsed: {r.GasUsed.Value} CumulativeGasUsed: {r.CumulativeGasUsed.Value}\n"
+                );
+            });
+
             // get the bytecode of the deployed contracts
             var deployedContractsBytecode = await Task.WhenAll(
                 TxReceipts
                     .Select(r => r.ContractAddress) // get the address of the deployed contract
                     .Where(address => address != null) // filter out null addresses
                     .Select(address => web3.Eth.GetCode.SendRequestAsync(address)).ToArray()); // get the bytecode of the deployed contract
+            
             // check if the bytecode starts with the EOF prefix
             var deployedContracts = deployedContractsBytecode
                 .Select(hexCode => hexCode.HexToByteArray()).Where(Check);
