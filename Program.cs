@@ -23,12 +23,32 @@ namespace NethereumSample
         static Stopwatch timer = new Stopwatch();
         static ConcurrentBag<BigInteger> FailedBlocks = new();
         static ConcurrentDictionary<BigInteger, bool> HandledBlocks = new();
+        static FileStream ErrorStream = File.Open("error.txt", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+        static (StreamWriter, StreamReader) ErrorStreamIO = (
+            new StreamWriter(ErrorStream),
+            new StreamReader(ErrorStream)
+        );
+        static FileStream HandledStream = File.Open("handled.txt", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+        static (StreamWriter, StreamReader) HandledStreamIO = (
+            new StreamWriter(HandledStream),
+            new StreamReader(HandledStream)
+        );
+        static FileStream ReceiptStream = File.Open("receipts.txt", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+        static (StreamWriter, StreamReader) ReceiptStreamIO = (
+            new StreamWriter(ReceiptStream),
+            new StreamReader(ReceiptStream)
+        );
         static async Task Main(string[] args)
         {
             int startBatch = args.Length > 0 ? int.Parse(args[0]) : 0;
             try {
-                FailedBlocks = new ConcurrentBag<BigInteger>(File.ReadAllLines("error.txt").Select(BigInteger.Parse).ToList());
-                File.ReadAllLines("handled.txt").Select(line => line.Split('-')).ToList()
+                FailedBlocks = new ConcurrentBag<BigInteger>(
+                    ErrorStreamIO.Item2.ReadToEnd().Split("\n")
+                        .Select(line => line.Split('-')[0])
+                        .Select(BigInteger.Parse)
+                        .ToList()
+                );
+                HandledStreamIO.Item2.ReadToEnd().Split("\n").Select(line => line.Split('-')).ToList()
                     .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[0]), bool.Parse(line[1]))); 
             }catch {}
             
@@ -62,11 +82,9 @@ namespace NethereumSample
                 Console.WriteLine("Done handling failed blocks");
             }
 
-            if(AnyEofsFound) {
-                Console.WriteLine("EOF found");
-            } else {
-                Console.WriteLine("No EOF found");
-            }
+            string message = AnyEofsFound ? "EOF found" : "No EOF found";
+            Console.WriteLine(message);
+            File.WriteAllText("found.txt", message);
         }
 
         static async Task<bool?> HandleBlockNumber(BigInteger i, Func<byte[], bool> Check, bool force = false) {
@@ -86,11 +104,13 @@ namespace NethereumSample
                 block.Transactions
                     .Select(tx => web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(tx.TransactionHash)).ToArray()); // get the receipt of the create transaction
             
-            TxReceipts.ToList().ForEach(r => {
-                File.AppendAllTextAsync("receipts.txt",
-                    $"Block: {i} Tx: {r.TransactionHash} Contract: {r.ContractAddress} Status: {r.Status.Value} GasUsed: {r.GasUsed.Value} CumulativeGasUsed: {r.CumulativeGasUsed.Value}\n"
-                );
-            });
+            lock(ReceiptStreamIO.Item1) {
+                TxReceipts.ToList().ForEach(r => {
+                    ReceiptStreamIO.Item1.WriteLine(
+                        $"Block: {i} Tx: {r.TransactionHash} From: {r.From} To: {r.To} Contract: {r.ContractAddress} Status: {r.Status.Value} GasUsed: {r.GasUsed.Value} CumulativeGasUsed: {r.CumulativeGasUsed.Value}"
+                    );
+                });
+            }
 
             // get the bytecode of the deployed contracts
             var deployedContractsBytecode = await Task.WhenAll(
@@ -107,7 +127,10 @@ namespace NethereumSample
                 Console.WriteLine("Found EOF at block: " + i);
             }
             HandledBlocks.TryAdd(i, hasEofContracts);
-            File.AppendAllTextAsync("handled.txt", $"{i}-{hasEofContracts}\n");
+
+            lock(HandledStreamIO.Item1) {
+                HandledStreamIO.Item1.WriteLine($"{i}-{hasEofContracts}");
+            }
             return hasEofContracts;
         }
 
@@ -122,8 +145,10 @@ namespace NethereumSample
                             return true;
                         }
                     } catch(Exception e) {
-                        Console.WriteLine("Error handling block: " + i + " error: " + e.Message);
-                        File.AppendAllText("error.txt", $"{i}\n");
+                        Console.WriteLine("Error handling block: " + (i + j) + " error: " + e.Message);
+                        lock(ErrorStreamIO.Item1){
+                            ErrorStreamIO.Item1.WriteLine($"{i + j}-{e.Message}");
+                        }
                         FailedBlocks.Add(i);
                     }
                     return false;
