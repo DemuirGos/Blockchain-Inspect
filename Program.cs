@@ -22,7 +22,6 @@ namespace NethereumSample
         static int BlockchainHeight = 19040000;
         static Stopwatch timer = new Stopwatch();
         static ConcurrentBag<BigInteger> FailedBlocks = new();
-        static ConcurrentBag<string> EofAddresses = new();
         static ConcurrentDictionary<BigInteger, bool> HandledBlocks = new();
         static FileStream ErrorStream = File.Open("error.txt", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
         static (StreamWriter, StreamReader) ErrorStreamIO = (
@@ -47,8 +46,8 @@ namespace NethereumSample
         
         static FileStream ResultsStream = File.Open("results.txt", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
         static (StreamWriter, StreamReader) ResultsStreamIO = (
-            new StreamWriter(ContractsStream),
-            new StreamReader(ContractsStream)
+            new StreamWriter(ResultsStream),
+            new StreamReader(ResultsStream)
         );
         static async Task Main(string[] args)
         {
@@ -62,9 +61,6 @@ namespace NethereumSample
                 );
                 HandledStreamIO.Item2.ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
                     .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[0]), bool.Parse(line[1]))); 
-                EofAddresses = new ConcurrentBag<string>(
-                    ContractsStreamIO.Item2.ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line)).ToList()
-                );
             }catch(Exception e) {
                 Console.WriteLine(e.Message);
                 throw;
@@ -141,11 +137,8 @@ namespace NethereumSample
                         .Select(tx => web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(tx.TransactionHash)).ToArray()); // get the receipt of the create transaction
                 
                 lock(ReceiptStreamIO.Item1) {
-                    TxReceipts.ToList().ForEach(r => {
-                        ReceiptStreamIO.Item1.WriteLine(
-                            $"Block: {i} Tx: {r.TransactionHash} From: {r.From} To: {r.To} Contract: {r.ContractAddress} Status: {r.Status.Value} GasUsed: {r.GasUsed.Value} CumulativeGasUsed: {r.CumulativeGasUsed.Value}"
-                        );
-                    });
+                    var batchrec = String.Join("\n", TxReceipts.Select(r => $"Block: {i} Tx: {r.TransactionHash} From: {r.From} To: {r.To} Contract: {r.ContractAddress} Status: {r.Status.Value} GasUsed: {r.GasUsed.Value} CumulativeGasUsed: {r.CumulativeGasUsed.Value}"));
+                    ReceiptStreamIO.Item1.WriteLine(batchrec);
                 }
                 
                 // get the bytecode of the deployed contracts
@@ -154,32 +147,27 @@ namespace NethereumSample
                         .Select(r => r.ContractAddress != null ? web3.Eth.GetCode.SendRequestAsync(r.ContractAddress) : Task.FromResult(string.Empty)).ToArray()); // get the bytecode of the deployed contract
                 
                 lock(ContractsStreamIO.Item1) {
-                    deployedContractsBytecode.Where(add => !String.IsNullOrEmpty(add)).ToList().ForEach(r => {
-                        ContractsStreamIO.Item1.WriteLine(
-                            $"Block: {i} Contract: {r}" 
-                        );
-                    });
+                    string batchdeped = String.Join("\n", deployedContractsBytecode.Where(add => !String.IsNullOrEmpty(add)).Select(r => $"Block: {i} Contract: {r}"));
+                    ContractsStreamIO.Item1.WriteLine(batchdeped);
                 }
 
                 // check if the bytecode starts with the EOF prefix
                 var deployedContracts = deployedContractsBytecode
-                    .Select((hexcode, idx) => (hexcode, idx))
-                    .Where(pair => Check(pair.hexcode.HexToByteArray()))
+                    .Select((HexCode, idx) => (HexCode, idx))
+                    .Where(pair => Check(pair.HexCode.HexToByteArray()))
                     .ToList();
 
                 bool hasEofContracts = deployedContracts.Any();
                 if(hasEofContracts) {
-                    lock(EofAddresses) {
-                        Console.WriteLine("Found EOF at block: " + i);
-                        deployedContracts.Select(pair => pair.idx)
-                            .ToList().ForEach(idx => {
-                                var address = TxReceipts[idx].ContractAddress;
-                                EofAddresses.Add(address);
-                                ResultsStreamIO.Item1.WriteLine(address);
-                            });
+                    lock(ResultsStreamIO.Item1) {
+                        var eofbatch = String.Join("\n", 
+                            deployedContracts.Select(pair => (TxReceipts[pair.idx].ContractAddress, pair.HexCode))
+                                .Select(c => $"Contract : {c.ContractAddress} Code : {c.HexCode}"));
+                        ResultsStreamIO.Item1.WriteLine(eofbatch);
                     }
                 }
-                HandledBlocks.TryAdd(i, hasEofContracts);
+
+                HandledBlocks.AddOrUpdate(i, hasEofContracts, (k, v) => hasEofContracts);
 
                 lock(HandledStreamIO.Item1) {
                     HandledStreamIO.Item1.WriteLine($"{i}-{hasEofContracts}");
