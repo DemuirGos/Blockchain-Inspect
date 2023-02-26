@@ -22,6 +22,7 @@ namespace NethereumSample
         static int BlockchainHeight = 19040000;
         static Stopwatch timer = new Stopwatch();
         static ConcurrentBag<BigInteger> FailedBlocks = new();
+        static ConcurrentBag<string> EofAddresses = new();
         static ConcurrentDictionary<BigInteger, bool> HandledBlocks = new();
         static FileStream ErrorStream = File.Open("error.txt", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
         static (StreamWriter, StreamReader) ErrorStreamIO = (
@@ -43,6 +44,12 @@ namespace NethereumSample
             new StreamWriter(ContractsStream),
             new StreamReader(ContractsStream)
         );
+        
+        static FileStream ResultsStream = File.Open("results.txt", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+        static (StreamWriter, StreamReader) ResultsStreamIO = (
+            new StreamWriter(ContractsStream),
+            new StreamReader(ContractsStream)
+        );
         static async Task Main(string[] args)
         {
             BigInteger startBatch = args.Length > 0 ? int.Parse(args[0]) / 1000: 0;
@@ -55,6 +62,9 @@ namespace NethereumSample
                 );
                 HandledStreamIO.Item2.ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
                     .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[0]), bool.Parse(line[1]))); 
+                EofAddresses = new ConcurrentBag<string>(
+                    ContractsStreamIO.Item2.ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line)).ToList()
+                );
             }catch(Exception e) {
                 Console.WriteLine(e.Message);
                 throw;
@@ -71,32 +81,46 @@ namespace NethereumSample
             int len = BlockchainHeight / batchSize;
 
             var AnyEofsFound = false;
-            for(BigInteger i = startBatch; !AnyEofsFound && i <= len; i++) {
+            for(BigInteger i = startBatch; i <= len; i++) {
                 var start = i * batchSize;
                 var end = (i + 1) * batchSize;
-                AnyEofsFound = await IsThereAnyEofInBlock(start, end, StartWithEofPrefixTx);
+                AnyEofsFound |= await IsThereAnyEofInBlock(start, end, StartWithEofPrefixTx);
             }
             // open error.txt and add the failed blocks to the FailedBlocks list
             if(FailedBlocks.Count > 0) {
                 Console.WriteLine("Handling failed blocks");
-                int? index = null;
-                do {
-                    index ??= (FailedBlocks.Count - 1); 
-                    var block = FailedBlocks.ElementAt(index.Value);
-                    var result = await HandleBlockNumber(block, StartWithEofPrefixTx, true);
-                    if(result is null) {
-                        continue;
-                    }
-                    index--;
-                    AnyEofsFound |= result.Value;
-                }
-                while (index >= 0);
+                AnyEofsFound |= await HandleRogueSet(FailedBlocks.ToList(), StartWithEofPrefixTx);
                 Console.WriteLine("Done handling failed blocks");
+            }
+
+            // make sure iota iteration didnt skip any blocks
+            var missingBlocks = Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i).Except(HandledBlocks.Keys).ToList();
+            if(missingBlocks.Count > 0) {
+                Console.WriteLine("Handling ignored blocks");
+                AnyEofsFound |= await HandleRogueSet(missingBlocks, StartWithEofPrefixTx);
+                Console.WriteLine("Done handling ignored blocks");
             }
 
             string message = AnyEofsFound ? "EOF found" : "No EOF found";
             Console.WriteLine(message);
             File.WriteAllText("found.txt", message);
+        }
+
+        async static Task<bool> HandleRogueSet(List<BigInteger> blocks, Func<byte[], bool> Check) {
+            bool hasAnyEof = false;
+            int? index = null;
+            do {
+                index ??= (blocks.Count - 1); 
+                var block = blocks.ElementAt(index.Value);
+                var result = await HandleBlockNumber(block, Check, true);
+                if(result is null) {
+                    continue;
+                }
+                index--;
+                hasAnyEof |= result.Value;
+            }
+            while (index >= 0);
+            return hasAnyEof;
         }
 
         static async Task<bool?> HandleBlockNumber(BigInteger i, Func<byte[], bool> Check, bool force = false, int retries = 10) {
@@ -141,10 +165,17 @@ namespace NethereumSample
 
                 // check if the bytecode starts with the EOF prefix
                 var deployedContracts = deployedContractsBytecode
-                    .Select(hexCode => hexCode.HexToByteArray()).Where(Check);
+                    .Select(( hexCode, idx) => (idx, hexCode.HexToByteArray())).Where(pair => Check(pair.Item2)).ToList();
                 bool hasEofContracts = deployedContracts.Any();
                 if(hasEofContracts) {
                     Console.WriteLine("Found EOF at block: " + i);
+                    deployedContracts.Select(pair => pair.idx).ToList().ForEach(idx => {
+                        var address = TxReceipts[idx].ContractAddress;
+                        lock(EofAddresses) {
+                            EofAddresses.Add(address);
+                            ResultsStreamIO.Item1.WriteLine(address);
+                        }
+                    });
                 }
                 HandledBlocks.TryAdd(i, hasEofContracts);
 
@@ -193,5 +224,7 @@ namespace NethereumSample
             Console.WriteLine("Done handling batch: " + start + " - " + end);
             return false;
         }
+
+
     }
 }
