@@ -201,7 +201,8 @@ namespace NethereumSample
             while(retries >= 0) {
                 try {
                     return await process();
-                } catch {
+                } catch(Exception e) {
+                    Console.WriteLine($"Error handling block {i}: {e.Message}");                    
                     if(retries == 0) {
                         throw;
                     }
