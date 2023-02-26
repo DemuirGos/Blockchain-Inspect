@@ -69,8 +69,8 @@ namespace NethereumSample
 
                 static BigInteger Max(BigInteger a, BigInteger b) => a > b ? a : b;
                 var batchSize= 1000;
-                var biggestKey = (HandledBlocks.Keys.Max() / batchSize);
-                var biggestError = (FailedBlocks.Max() / batchSize);
+                var biggestKey = (HandledBlocks.IsEmpty ? 0 : HandledBlocks.Keys.Max() / batchSize);
+                var biggestError = (FailedBlocks.IsEmpty ? 0 : FailedBlocks.Max() / batchSize);
                 startBatch = Max(Max(biggestKey, biggestError), startBatch);
                 Console.WriteLine($"Starting from batch {startBatch}");
                 bool StartWithEofPrefixTx(byte[] bytecode) => bytecode.AsSpan().StartsWith(EofPrefix);
