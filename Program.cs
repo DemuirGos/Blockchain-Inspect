@@ -141,7 +141,7 @@ namespace NethereumSample
                         .Select(tx => web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(tx.TransactionHash)).ToArray()); // get the receipt of the create transaction
                 
                 lock(ReceiptStreamIO.Item1) {
-                TxReceipts.ToList().ForEach(r => {
+                    TxReceipts.ToList().ForEach(r => {
                         ReceiptStreamIO.Item1.WriteLine(
                             $"Block: {i} Tx: {r.TransactionHash} From: {r.From} To: {r.To} Contract: {r.ContractAddress} Status: {r.Status.Value} GasUsed: {r.GasUsed.Value} CumulativeGasUsed: {r.CumulativeGasUsed.Value}"
                         );
@@ -151,12 +151,10 @@ namespace NethereumSample
                 // get the bytecode of the deployed contracts
                 var deployedContractsBytecode = await Task.WhenAll(
                     TxReceipts
-                        .Select(r => r.ContractAddress) // get the address of the deployed contract
-                        .Where(address => address != null) // filter out null addresses
-                        .Select(address => web3.Eth.GetCode.SendRequestAsync(address)).ToArray()); // get the bytecode of the deployed contract
+                        .Select(r => r.ContractAddress != null ? web3.Eth.GetCode.SendRequestAsync(r.ContractAddress) : Task.FromResult(string.Empty)).ToArray()); // get the bytecode of the deployed contract
                 
                 lock(ContractsStreamIO.Item1) {
-                    deployedContractsBytecode.ToList().ForEach(r => {
+                    deployedContractsBytecode.Where(add => !String.IsNullOrEmpty(add)).ToList().ForEach(r => {
                         ContractsStreamIO.Item1.WriteLine(
                             $"Block: {i} Contract: {r}" 
                         );
@@ -165,17 +163,21 @@ namespace NethereumSample
 
                 // check if the bytecode starts with the EOF prefix
                 var deployedContracts = deployedContractsBytecode
-                    .Select(( hexCode, idx) => (idx, hexCode.HexToByteArray())).Where(pair => Check(pair.Item2)).ToList();
+                    .Select((hexcode, idx) => (hexcode, idx))
+                    .Where(pair => Check(pair.hexcode.HexToByteArray()))
+                    .ToList();
+
                 bool hasEofContracts = deployedContracts.Any();
                 if(hasEofContracts) {
-                    Console.WriteLine("Found EOF at block: " + i);
-                    deployedContracts.Select(pair => pair.idx).ToList().ForEach(idx => {
-                        var address = TxReceipts[idx].ContractAddress;
-                        lock(EofAddresses) {
-                            EofAddresses.Add(address);
-                            ResultsStreamIO.Item1.WriteLine(address);
-                        }
-                    });
+                    lock(EofAddresses) {
+                        Console.WriteLine("Found EOF at block: " + i);
+                        deployedContracts.Select(pair => pair.idx)
+                            .ToList().ForEach(idx => {
+                                var address = TxReceipts[idx].ContractAddress;
+                                EofAddresses.Add(address);
+                                ResultsStreamIO.Item1.WriteLine(address);
+                            });
+                    }
                 }
                 HandledBlocks.TryAdd(i, hasEofContracts);
 
