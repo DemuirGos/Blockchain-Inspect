@@ -51,55 +51,78 @@ namespace NethereumSample
         );
         static async Task Main(string[] args)
         {
-            BigInteger startBatch = args.Length > 0 ? int.Parse(args[0]) / 1000: 0;
             try {
-                FailedBlocks = new ConcurrentBag<BigInteger>(
-                    ErrorStreamIO.Item2.ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line))
-                        .Select(line => line.Split('-')[0])
-                        .Select(BigInteger.Parse)
-                        .ToList()
-                );
-                HandledStreamIO.Item2.ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
-                    .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[0]), bool.Parse(line[1]))); 
-            }catch(Exception e) {
-                Console.WriteLine(e.Message);
-                throw;
-            }
+                BigInteger startBatch = args.Length > 0 ? int.Parse(args[0]) / 1000: 0;
+                try {
+                    FailedBlocks = new ConcurrentBag<BigInteger>(
+                        ErrorStreamIO.Item2.ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line))
+                            .Select(line => line.Split('-')[0])
+                            .Select(BigInteger.Parse)
+                            .ToList()
+                    );
+                    HandledStreamIO.Item2.ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
+                        .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[0]), bool.Parse(line[1]))); 
+                }catch(Exception e) {
+                    Console.WriteLine(e.Message);
+                    throw;
+                }
 
-            static BigInteger Max(BigInteger a, BigInteger b) => a > b ? a : b;
-            var batchSize= 1000;
-            var biggestKey = (HandledBlocks.Keys.Max() / batchSize);
-            var biggestError = (FailedBlocks.Max() / batchSize);
-            startBatch = Max(Max(biggestKey, biggestError), startBatch);
-            Console.WriteLine($"Starting from batch {startBatch}");
-            bool StartWithEofPrefixTx(byte[] bytecode) => bytecode.AsSpan().StartsWith(EofPrefix);
-            List<BlockWithTransactions> blocks = new(); 
-            int len = BlockchainHeight / batchSize;
+                static BigInteger Max(BigInteger a, BigInteger b) => a > b ? a : b;
+                var batchSize= 1000;
+                var biggestKey = (HandledBlocks.Keys.Max() / batchSize);
+                var biggestError = (FailedBlocks.Max() / batchSize);
+                startBatch = Max(Max(biggestKey, biggestError), startBatch);
+                Console.WriteLine($"Starting from batch {startBatch}");
+                bool StartWithEofPrefixTx(byte[] bytecode) => bytecode.AsSpan().StartsWith(EofPrefix);
+                List<BlockWithTransactions> blocks = new(); 
+                int len = BlockchainHeight / batchSize;
 
-            var AnyEofsFound = false;
-            for(BigInteger i = startBatch; i <= len; i++) {
-                var start = i * batchSize;
-                var end = (i + 1) * batchSize;
-                AnyEofsFound |= await IsThereAnyEofInBlock(start, end, StartWithEofPrefixTx);
-            }
-            // open error.txt and add the failed blocks to the FailedBlocks list
-            if(FailedBlocks.Count > 0) {
-                Console.WriteLine("Handling failed blocks");
-                AnyEofsFound |= await HandleRogueSet(FailedBlocks.ToList(), StartWithEofPrefixTx);
-                Console.WriteLine("Done handling failed blocks");
-            }
+                var AnyEofsFound = false;
+                for(BigInteger i = startBatch; i <= len; i++) {
+                    var start = i * batchSize;
+                    var end = (i + 1) * batchSize;
+                    AnyEofsFound |= await IsThereAnyEofInBlock(start, end, StartWithEofPrefixTx);
+                }
+                // open error.txt and add the failed blocks to the FailedBlocks list
+                if(FailedBlocks.Count > 0) {
+                    Console.WriteLine("Handling failed blocks");
+                    AnyEofsFound |= await HandleRogueSet(FailedBlocks.ToList(), StartWithEofPrefixTx);
+                    Console.WriteLine("Done handling failed blocks");
+                }
 
-            // make sure iota iteration didnt skip any blocks
-            var missingBlocks = Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i).Except(HandledBlocks.Keys).ToList();
-            if(missingBlocks.Count > 0) {
-                Console.WriteLine("Handling ignored blocks");
-                AnyEofsFound |= await HandleRogueSet(missingBlocks, StartWithEofPrefixTx);
-                Console.WriteLine("Done handling ignored blocks");
-            }
+                // make sure iota iteration didnt skip any blocks
+                var missingBlocks = Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i).Except(HandledBlocks.Keys).ToList();
+                if(missingBlocks.Count > 0) {
+                    Console.WriteLine("Handling ignored blocks");
+                    AnyEofsFound |= await HandleRogueSet(missingBlocks, StartWithEofPrefixTx);
+                    Console.WriteLine("Done handling ignored blocks");
+                }
 
-            string message = AnyEofsFound ? "EOF found" : "No EOF found";
-            Console.WriteLine(message);
-            File.WriteAllText("found.txt", message);
+                string message = AnyEofsFound ? "EOF found" : "No EOF found";
+                Console.WriteLine(message);
+                File.WriteAllText("found.txt", message);
+            } finally {
+                ErrorStreamIO.Item1.Flush();
+                ErrorStreamIO.Item1.Dispose();
+                ErrorStreamIO.Item2.Dispose();
+                ErrorStream.Dispose();
+                HandledStreamIO.Item1.Flush();
+                HandledStreamIO.Item1.Dispose();
+                HandledStreamIO.Item2.Dispose();
+                HandledStream.Dispose();
+                ReceiptStreamIO.Item1.Flush();
+                ReceiptStreamIO.Item1.Dispose();
+                ReceiptStreamIO.Item2.Dispose();
+                ReceiptStream.Dispose();
+                ContractsStreamIO.Item1.Flush();
+                ContractsStreamIO.Item1.Dispose();
+                ContractsStreamIO.Item2.Dispose();
+                ContractsStream.Dispose();
+                ResultsStreamIO.Item1.Flush();
+                ResultsStreamIO.Item1.Dispose();
+                ResultsStreamIO.Item2.Dispose();
+                ResultsStream.Dispose();
+            }
         }
 
         async static Task<bool> HandleRogueSet(List<BigInteger> blocks, Func<byte[], bool> Check) {
