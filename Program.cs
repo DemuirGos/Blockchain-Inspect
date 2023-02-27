@@ -18,7 +18,7 @@ namespace NethereumSample
     class Program
     {
         public static readonly byte[] EofPrefix = { 0xEF, 0x00 };
-        static Web3? web3 = new Nethereum.Web3.Web3("http://139.144.23.46:8545");
+        static Web3? web3 = new Nethereum.Web3.Web3("http://127.0.0.1:8545");
         static int BlockchainHeight = 19040000;
         static Stopwatch timer = new Stopwatch();
         static ConcurrentBag<BigInteger> FailedBlocks = new();
@@ -68,7 +68,7 @@ namespace NethereumSample
                 }
 
                 static BigInteger Max(BigInteger a, BigInteger b) => a > b ? a : b;
-                var batchSize= 1000;
+                var batchSize= 10000;
                 var biggestKey = (HandledBlocks.IsEmpty ? 0 : HandledBlocks.Keys.Max() / batchSize);
                 var biggestError = (FailedBlocks.IsEmpty ? 0 : FailedBlocks.Max() / batchSize);
                 startBatch = Max(Max(biggestKey, biggestError), startBatch);
@@ -84,10 +84,19 @@ namespace NethereumSample
                     AnyEofsFound |= await IsThereAnyEofInBlock(start, end, StartWithEofPrefixTx);
                 }
                 // open error.txt and add the failed blocks to the FailedBlocks list
-                if(FailedBlocks.Count > 0) {
+                var failedBlocks = FailedBlocks.ToList();
+                if(failedBlocks.Count > 0) {
                     Console.WriteLine("Handling failed blocks");
-                    AnyEofsFound |= await HandleRogueSet(FailedBlocks.ToList(), StartWithEofPrefixTx);
+                    AnyEofsFound |= await HandleRogueSet(failedBlocks, StartWithEofPrefixTx);
                     Console.WriteLine("Done handling failed blocks");
+
+                    
+                    ErrorStreamIO.Item1.Flush();
+                    ErrorStreamIO.Item1.Dispose();
+                    ErrorStreamIO.Item2.Dispose();
+                    ErrorStream.Dispose();
+
+                    File.Delete("error.txt");
                 }
 
                 // make sure iota iteration didnt skip any blocks
@@ -130,8 +139,8 @@ namespace NethereumSample
             int? index = null;
             do {
                 index ??= (blocks.Count - 1); 
-                var block = blocks.ElementAt(index.Value);
-                var result = await HandleBlockNumber(block, Check, true);
+                var block = blocks[index.Value];
+                var result = await HandleBlockNumber(block, Check, true, -1);
                 if(result is null) {
                     continue;
                 }
@@ -142,8 +151,9 @@ namespace NethereumSample
             return hasAnyEof;
         }
 
-        static async Task<bool?> HandleBlockNumber(BigInteger i, Func<byte[], bool> Check, bool force = false, int retries = 10) {
+        static async Task<bool?> HandleBlockNumber(BigInteger i, Func<byte[], bool> Check, bool force, int retries) {
             Func<Task<bool?>> process = async () => {
+                Console.WriteLine($"Handling Block Number {i}");
                 if(HandledBlocks.ContainsKey(i)) {
                     return HandledBlocks[i];
                 }
@@ -152,8 +162,7 @@ namespace NethereumSample
                     return null;
                 }
 
-                await Task.Delay((int)i % 1000);
-                BlockWithTransactions block = await web3.Eth.Blocks.GetBlockWithTransactionsByNumber.SendRequestAsync(new BlockParameter(new HexBigInteger(i)));
+                BlockWithTransactions block = await web3.Eth.Blocks.GetBlockWithTransactionsByNumber.SendRequestAsync(new BlockParameter(i.ToHexBigInteger()));
                         // get the receipts of the create transactions
                 var TxReceipts = await Task.WhenAll(
                     block.Transactions
@@ -170,7 +179,7 @@ namespace NethereumSample
                         .Select(r => r.ContractAddress != null ? web3.Eth.GetCode.SendRequestAsync(r.ContractAddress) : Task.FromResult(string.Empty)).ToArray()); // get the bytecode of the deployed contract
                 
                 lock(ContractsStreamIO.Item1) {
-                    string batchdeped = String.Join("\n", deployedContractsBytecode.Where(add => !String.IsNullOrEmpty(add)).Select(r => $"Block: {i} Contract: {r}"));
+                    string batchdeped = String.Join("\n", deployedContractsBytecode.Where(add => !String.IsNullOrWhiteSpace(add)).Select(r => $"Block: {i} Contract: {r}"));
                     ContractsStreamIO.Item1.WriteLine(batchdeped);
                 }
 
@@ -198,7 +207,7 @@ namespace NethereumSample
                 return hasEofContracts;
             };
 
-            while(retries >= 0) {
+            while(retries != 0) {
                 try {
                     return await process();
                 } catch(Exception e) {
@@ -207,19 +216,18 @@ namespace NethereumSample
                         throw;
                     }
                     retries--;
-                    await Task.Delay(1000);
                 }
             }
             return null;
         }
 
         static async Task<bool> IsThereAnyEofInBlock(BigInteger start, BigInteger end, Func<byte[], bool> Check) {
-            int subbatchSize = 100;
+            int subbatchSize = 1000;
             Console.WriteLine("Handling batch: " + start + " - " + end);
             for(BigInteger i = start; i < end; i+=subbatchSize) {
                 var results = await Task.WhenAll(Enumerable.Range(0, subbatchSize).Select(async j => {
                     try {
-                        var result = await HandleBlockNumber(i + j, Check);
+                        var result = await HandleBlockNumber(i + j, Check, false, 10);
                         if(result ?? false) {
                             return true;
                         }
