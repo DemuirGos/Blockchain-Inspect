@@ -32,6 +32,8 @@ namespace NethereumSample
 
         static FileStreamOptions StreamOptions = new FileStreamOptions {
             Mode = FileMode.OpenOrCreate | FileMode.Append,
+            Access = FileAccess.Write,
+            Options = FileOptions.Asynchronous
         };
         static volatile StreamWriter ReceiptStream = new("receipts.txt", StreamOptions);
         static volatile StreamWriter ContractsStream = new("contracts.txt", StreamOptions);
