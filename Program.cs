@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Numerics;
+using System.Text;
 using System.Threading.Tasks;
 using Nethereum.BlockchainProcessing.BlockStorage.Entities;
 using Nethereum.Hex.HexConvertors.Extensions;
@@ -31,38 +32,33 @@ namespace NethereumSample
         static ConcurrentDictionary<BigInteger, bool> HandledBlocks = new();
 
         static FileStreamOptions StreamOptions = new FileStreamOptions {
-            Mode = FileMode.OpenOrCreate | FileMode.Append,
-            Access = FileAccess.Write,
+            Mode = FileMode.OpenOrCreate,
+            Access = FileAccess.Write | FileAccess.Read,
             Options = FileOptions.Asynchronous
         };
-        static volatile StreamWriter ReceiptStream;
-        static volatile StreamWriter ContractsStream;
-        static volatile StreamWriter ResultsStream;
-        static volatile StreamWriter ErrorStream;
-        static volatile StreamWriter ProgressStream;
+        static volatile FileStream ReceiptStream = new("receipts.txt", StreamOptions); 
+        static volatile FileStream ContractsStream = new("contracts.txt", StreamOptions); 
+        static volatile FileStream ResultsStream = new("results.txt", StreamOptions); 
+        static volatile FileStream ErrorStream = new("errors.txt", StreamOptions); 
+        static volatile FileStream ProgressStream = new("progress.txt", StreamOptions); 
 
         static async Task Setup() {
             try {
-                Task.WaitAll(
+                await Task.WhenAll(
                     Task.Run(async () => {
-                        File.OpenText("errors.txt").ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line))
+                        ErrorStream.ReadAllLines().Where(line => !String.IsNullOrWhiteSpace(line))
                             .Select(line => line.Split('-')[0])
                             .Select(BigInteger.Parse)
                             .ToList().ForEach(FailedBlocks.Add);
                     }),
                     Task.Run(async () => {
-                        File.OpenText("progress.txt").ReadToEnd().Split("\n").Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
+                        ProgressStream.ReadAllLines().Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
                             .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[0]), bool.Parse(line[1])));
                     })
                 );
-
-                ReceiptStream = new("receipts.txt", StreamOptions);
-                ContractsStream = new("contracts.txt", StreamOptions);
-                ResultsStream = new("results.txt", StreamOptions);
-                ErrorStream = new("errors.txt", StreamOptions);
-                ProgressStream = new("progress.txt", StreamOptions);
+                
             }catch(Exception e) {
-                Console.WriteLine(e.Message);
+                Console.WriteLine(e.StackTrace);
                 throw;
             }
         }
@@ -211,7 +207,19 @@ namespace NethereumSample
             Console.WriteLine("Handling batch: " + batch.First() + " - " + batch.Last());
             return false;
         }
+    }
 
+    public static class Extensions {
+        public static void WriteLine(this FileStream stream, string line) {
+            var bytes = Encoding.UTF8.GetBytes(line + "\n");
+            stream.Seek(0, SeekOrigin.End);
+            stream.Write(bytes, 0, bytes.Length);
+        }
 
+        public static IEnumerable<string> ReadAllLines(this FileStream stream) {
+            var bytes = new byte[stream.Length];
+            stream.Read(bytes, 0, bytes.Length);
+            return Encoding.UTF8.GetString(bytes).Split("\n");
+        }
     }
 }
