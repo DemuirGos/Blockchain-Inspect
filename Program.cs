@@ -72,24 +72,18 @@ namespace NethereumSample
                 var failedTheChecks = false;
 
                 Console.WriteLine("Handling first pass blocks");
-                var batches = await Task.WhenAll(Enumerable.Range(0, BlockchainHeight)
-                    .Select(i => (BigInteger)i)
-                    .Chunk(Size.OfBatch)
-                    .Select(b => HandleBlockBatch(b, false, 20)));
-                failedTheChecks |= batches.Any(e => e);
+                foreach(var block_batch in Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i).Chunk(Size.OfBatch))
+                    failedTheChecks |= await HandleBlockBatch(block_batch, false, 20);
                 Console.WriteLine("Handling first pass blocks");
 
                 Console.WriteLine("Handling failed blocks");
-                var err_results = await Task.WhenAll(FailedBlocks.Chunk(Size.OfBatch)
-                    .Select(chunk => HandleBlockBatch(chunk, true, -1)));
-                failedTheChecks |= err_results.Any(e => e);
+                foreach(var failed_batch in FailedBlocks.Chunk(Size.OfBatch))
+                    failedTheChecks |= await HandleBlockBatch(failed_batch, true, -1);
                 Console.WriteLine("Done handling failed blocks");
 
                 Console.WriteLine("Handling ignored blocks");
-                var corr_results = await Task.WhenAll(Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i)
-                    .Except(HandledBlocks.Keys).Chunk(Size.OfBatch)
-                    .Select(chunk => HandleBlockBatch(chunk, true, -1)));
-                failedTheChecks |= corr_results.Any(e => e);
+                foreach(var correction_batch in Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i).Except(HandledBlocks.Keys).Chunk(Size.OfBatch))
+                    failedTheChecks |= await HandleBlockBatch(correction_batch, true, -1);
                 Console.WriteLine("Done handling ignored blocks");
 
                 string message = failedTheChecks ? "Eip:[3540-170] conflicts found" : "No conflicts found";
