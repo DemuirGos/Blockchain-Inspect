@@ -30,11 +30,14 @@ namespace NethereumSample
         static ConcurrentBag<BigInteger> FailedBlocks = new();
         static ConcurrentDictionary<BigInteger, bool> HandledBlocks = new();
 
-        static volatile StreamWriter ReceiptStream = new("receipts.txt");
-        static volatile StreamWriter ContractsStream = new("contracts.txt");
-        static volatile StreamWriter ResultsStream = new("results.txt");
-        static volatile StreamWriter ErrorStream = new("errors.txt");
-        static volatile StreamWriter ProgressStream = new("progress.txt");
+        static FileStreamOptions StreamOptions = new FileStreamOptions {
+            Mode = FileMode.OpenOrCreate | FileMode.Append,
+        };
+        static volatile StreamWriter ReceiptStream = new("receipts.txt", StreamOptions);
+        static volatile StreamWriter ContractsStream = new("contracts.txt", StreamOptions);
+        static volatile StreamWriter ResultsStream = new("results.txt", StreamOptions);
+        static volatile StreamWriter ErrorStream = new("errors.txt", StreamOptions);
+        static volatile StreamWriter ProgressStream = new("progress.txt", StreamOptions);
 
         static async Task Setup() {
             try {
