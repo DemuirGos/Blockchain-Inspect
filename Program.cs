@@ -35,11 +35,11 @@ namespace NethereumSample
             Access = FileAccess.Write,
             Options = FileOptions.Asynchronous
         };
-        static volatile StreamWriter ReceiptStream = new("receipts.txt", StreamOptions);
-        static volatile StreamWriter ContractsStream = new("contracts.txt", StreamOptions);
-        static volatile StreamWriter ResultsStream = new("results.txt", StreamOptions);
-        static volatile StreamWriter ErrorStream = new("errors.txt", StreamOptions);
-        static volatile StreamWriter ProgressStream = new("progress.txt", StreamOptions);
+        static volatile StreamWriter ReceiptStream;
+        static volatile StreamWriter ContractsStream;
+        static volatile StreamWriter ResultsStream;
+        static volatile StreamWriter ErrorStream;
+        static volatile StreamWriter ProgressStream;
 
         static async Task Setup() {
             try {
@@ -55,6 +55,12 @@ namespace NethereumSample
                             .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[0]), bool.Parse(line[1])));
                     })
                 );
+
+                ReceiptStream = new("receipts.txt", StreamOptions);
+                ContractsStream = new("contracts.txt", StreamOptions);
+                ResultsStream = new("results.txt", StreamOptions);
+                ErrorStream = new("errors.txt", StreamOptions);
+                ProgressStream = new("progress.txt", StreamOptions);
             }catch(Exception e) {
                 Console.WriteLine(e.Message);
                 throw;
