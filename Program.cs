@@ -141,7 +141,6 @@ namespace NethereumSample
 
         static async Task<bool?> HandleBlockNumber(BigInteger i, Func<byte[], bool> Check, bool force, int retries) {
             Func<Task<bool?>> process = async () => {
-                Console.WriteLine($"Handling Block Number {i}");
                 if(HandledBlocks.ContainsKey(i)) {
                     return HandledBlocks[i];
                 }
@@ -150,6 +149,8 @@ namespace NethereumSample
                     return null;
                 }
 
+
+                await Task.Delay(System.Random.Shared.Next(0, 1000));
                 BlockWithTransactions block = await web3.Eth.Blocks.GetBlockWithTransactionsByNumber.SendRequestAsync(new BlockParameter(i.ToHexBigInteger()));
                         // get the receipts of the create transactions
                 var TxReceipts = await Task.WhenAll(
@@ -204,6 +205,7 @@ namespace NethereumSample
                         throw;
                     }
                     retries--;
+                    await Task.Delay(1000);
                 }
             }
             return null;
