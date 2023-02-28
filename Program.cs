@@ -84,28 +84,16 @@ namespace NethereumSample
                     AnyEofsFound |= await IsThereAnyEofInBlock(start, end, StartWithEofPrefixTx);
                 }
                 // open error.txt and add the failed blocks to the FailedBlocks list
-                var failedBlocks = FailedBlocks.ToList();
-                if(failedBlocks.Count > 0) {
-                    Console.WriteLine("Handling failed blocks");
-                    AnyEofsFound |= await HandleRogueSet(failedBlocks, StartWithEofPrefixTx);
-                    Console.WriteLine("Done handling failed blocks");
-
-                    
-                    ErrorStreamIO.Item1.Flush();
-                    ErrorStreamIO.Item1.Dispose();
-                    ErrorStreamIO.Item2.Dispose();
-                    ErrorStream.Dispose();
-
-                    File.Delete("error.txt");
-                }
+                Console.WriteLine("Handling failed blocks");
+                var err_results = await Task.WhenAll(FailedBlocks.Chunk(100).Select(chunk => HandleRogueSet(chunk.ToList(), StartWithEofPrefixTx)));
+                AnyEofsFound |= err_results.Any(e => e);
+                Console.WriteLine("Done handling failed blocks");
 
                 // make sure iota iteration didnt skip any blocks
                 var missingBlocks = Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i).Except(HandledBlocks.Keys).ToList();
-                if(missingBlocks.Count > 0) {
-                    Console.WriteLine("Handling ignored blocks");
-                    AnyEofsFound |= await HandleRogueSet(missingBlocks, StartWithEofPrefixTx);
-                    Console.WriteLine("Done handling ignored blocks");
-                }
+                Console.WriteLine("Handling ignored blocks");
+                AnyEofsFound |= await HandleRogueSet(missingBlocks, StartWithEofPrefixTx);
+                Console.WriteLine("Done handling ignored blocks");
 
                 string message = AnyEofsFound ? "EOF found" : "No EOF found";
                 Console.WriteLine(message);
