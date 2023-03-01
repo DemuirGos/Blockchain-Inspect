@@ -36,9 +36,8 @@ namespace NethereumSample
             Access = FileAccess.Write | FileAccess.Read,
             Options = FileOptions.Asynchronous
         };
-        static volatile FileStream ReceiptStream = new("receipts.txt", StreamOptions); 
-        static volatile FileStream ContractsStream = new("contracts.txt", StreamOptions); 
-        static volatile FileStream ResultsStream = new("results.txt", StreamOptions); 
+
+        static volatile object LockSem = new object();
         static volatile FileStream ErrorStream = new("errors.txt", StreamOptions); 
         static volatile FileStream ProgressStream = new("progress.txt", StreamOptions); 
 
@@ -53,7 +52,7 @@ namespace NethereumSample
                     }),
                     Task.Run(async () => {
                         ProgressStream.ReadAllLines().Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
-                            .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[0]), bool.Parse(line[1])));
+                            .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[1]), bool.Parse(line[2])));
                     })
                 );
                 
@@ -93,9 +92,6 @@ namespace NethereumSample
                 Console.WriteLine(e.Message);
                 throw;
             } finally {
-                ReceiptStream.Close();
-                ContractsStream.Close();
-                ResultsStream.Close();
                 ErrorStream.Close();
                 ProgressStream.Close();
             }
@@ -119,9 +115,10 @@ namespace NethereumSample
                     block.Transactions
                         .Select(tx => web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(tx.TransactionHash)).ToArray()); // get the receipt of the create transaction
                 
-                lock(ReceiptStream) {
-                    var batchrec = String.Join("\n", TxReceipts.Select(r => $"Block: {i} Tx: {r.TransactionHash} From: {r.From} To: {r.To} Contract: {r.ContractAddress} Status: {r.Status.Value} GasUsed: {r.GasUsed.Value} CumulativeGasUsed: {r.CumulativeGasUsed.Value}"));
-                    ReceiptStream.WriteLine(batchrec);
+                lock(LockSem) {
+                    foreach(var receipt in TxReceipts) {
+                        File.WriteAllText($"./contracts/{receipt.TransactionHash}.txt", System.Text.Json.JsonSerializer.Serialize(receipt));
+                    }
                 }
                 
                 // get the bytecode of the deployed contracts
@@ -129,10 +126,14 @@ namespace NethereumSample
                     TxReceipts
                         .Select(r => r.ContractAddress != null ? web3.Eth.GetCode.SendRequestAsync(r.ContractAddress) : Task.FromResult(string.Empty)).ToArray()); // get the bytecode of the deployed contract
                 
-                lock(ContractsStream) {
-                    string batchdeped = String.Join("\n", deployedContractsBytecode.Where(add => !String.IsNullOrWhiteSpace(add)).Select(r => $"Block: {i} Contract: {r}"));
-                    ContractsStream.WriteLine(batchdeped);
-                    ContractsStream.Flush();
+                lock(LockSem) {
+                    int bcIndex = 0;
+                    foreach(string bytecode in deployedContractsBytecode) {
+                        if(String.IsNullOrWhiteSpace(bytecode)) continue;
+                        string address = TxReceipts[bcIndex].ContractAddress;
+                        File.WriteAllText($"./contracts/{address}.txt", bytecode);
+                        bcIndex++;
+                    }
                 }
 
                 // check if the bytecode starts with the EOF prefix
@@ -146,19 +147,19 @@ namespace NethereumSample
 
                 bool failedTheFilter = deployedContracts.Any();
                 if(failedTheFilter) {
-                    lock(ResultsStream) {
-                        var eofbatch = String.Join("\n", 
-                            deployedContracts.Select(pair => (TxReceipts[pair.idx].ContractAddress, pair.HexCode))
-                                .Select(c => $"Contract : {c.ContractAddress} Code : {c.HexCode}"));
-                        ResultsStream.WriteLine(eofbatch);
-                        ResultsStream.Flush();
+                    lock(LockSem) {
+                        foreach(var pair in deployedContracts) {
+                            string address = TxReceipts[pair.idx].ContractAddress;
+                            File.WriteAllText($"./contracts/{address}.txt", pair.HexCode);
+                            File.WriteAllText($"./results/{address}.txt", $"Block : {i} Contract : {TxReceipts[pair.idx].ContractAddress} Code : {pair.HexCode}");
+                        }
                     }
                 }
 
                 HandledBlocks.AddOrUpdate(i, failedTheFilter, (k, v) => failedTheFilter);
 
                 lock(ProgressStream) {
-                    ProgressStream.WriteLine($"{i}-{failedTheFilter}");
+                    ProgressStream.WriteLine($"Block-{i}-{failedTheFilter}-rcts:{TxReceipts.Length}-cntcts:{deployedContracts.Count}");
                     ProgressStream.Flush();
                 }
                 return failedTheFilter;
