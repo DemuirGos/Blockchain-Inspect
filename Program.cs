@@ -243,9 +243,10 @@ namespace NethereumSample
                     }
                 } 
             }
+
             foreach (var file in targetFolders)
             {
-                for(int i = 0; i < 3; i++) {
+                for(int i = 0; i < nestedPath.Length; i++) {
                     string path = GetOrderPath(file, i, nestedPath);
                     if(!Directory.Exists(path)) {
                         Directory.CreateDirectory(path);
@@ -253,7 +254,7 @@ namespace NethereumSample
                 }
             }
 
-            return GetOrderPath(string.Empty, 3, nestedPath);
+            return GetOrderPath(string.Empty, nestedPath.Length, nestedPath);
         } 
     }
 }
