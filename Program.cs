@@ -25,7 +25,7 @@ namespace NethereumSample
             /*Eip-170*/ (byte[] bytecode) => bytecode.Length > BytecodeMeteredLen
         };
 
-        static Web3? web3 = new Nethereum.Web3.Web3("http://127.0.0.1:8545");
+        static readonly Web3 web3 = new Nethereum.Web3.Web3("http://127.0.0.1:8545");
         static (int OfBatch, int OfSubBatch) Size = (10000, 1000);
         static Stopwatch timer = new Stopwatch();
         static ConcurrentBag<BigInteger> FailedBlocks = new();
@@ -40,25 +40,23 @@ namespace NethereumSample
         static volatile object LockSem = new object();
         static volatile FileStream ErrorStream = new("errors.txt", StreamOptions); 
         static volatile FileStream ProgressStream = new("progress.txt", StreamOptions); 
-
+        static readonly string[] LogFolders = new [] { "receipts", "contracts", "results" };
         static async Task Setup() {
             try {
                 await Task.WhenAll(
-                    Task.Run(async () => {
+                    Task.Run(() => {
                         ErrorStream.ReadAllLines().Where(line => !String.IsNullOrWhiteSpace(line))
                             .Select(line => line.Split('-')[0])
                             .Select(BigInteger.Parse)
                             .ToList().ForEach(FailedBlocks.Add);
                     }),
-                    Task.Run(async () => {
+                    Task.Run(() => {
                         ProgressStream.ReadAllLines().Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
                             .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[1]), bool.Parse(line[2])));
                     })
                 );
                 
-                Directory.CreateDirectory("receipts");
-                Directory.CreateDirectory("contracts");
-                Directory.CreateDirectory("results");
+                Extensions.SetupSubFolder(LogFolders);
             }catch(Exception e) {
                 Console.WriteLine(e.StackTrace);
                 throw;
@@ -100,8 +98,10 @@ namespace NethereumSample
             }
         }
 
-        static async Task<bool?> HandleBlockNumber(BigInteger i, bool force, int retries) {
+        static async Task<bool?> HandleBlockNumber(string[] path, BigInteger i, bool force, int retries, ConcurrentBag<string>[] TempLogSink) {
             Func<Task<bool?>> process = async () => {
+                string subPath =  Extensions.SetupSubFolder(LogFolders, path[0], path[1], i.ToString());
+
                 if(HandledBlocks.ContainsKey(i)) {
                     return HandledBlocks[i];
                 }
@@ -110,7 +110,7 @@ namespace NethereumSample
                     return null;
                 }
 
-
+                
                 BlockWithTransactions block = await web3.Eth.Blocks.GetBlockWithTransactionsByNumber.SendRequestAsync(new BlockParameter(i.ToHexBigInteger()));
                         // get the receipts of the create transactions
                 var TxReceipts = await Task.WhenAll(
@@ -119,7 +119,7 @@ namespace NethereumSample
                 
                 lock(LockSem) {
                     foreach(var receipt in TxReceipts) {
-                        File.WriteAllText($"./receipts/{receipt.TransactionHash}.txt", System.Text.Json.JsonSerializer.Serialize(receipt));
+                        File.WriteAllText($"./receipts{subPath}/{receipt.TransactionHash}.txt", System.Text.Json.JsonSerializer.Serialize(receipt));
                     }
                 }
                 
@@ -133,7 +133,7 @@ namespace NethereumSample
                     foreach(string bytecode in deployedContractsBytecode) {
                         if(String.IsNullOrWhiteSpace(bytecode)) continue;
                         string address = TxReceipts[bcIndex].ContractAddress;
-                        File.WriteAllText($"./contracts/{address}.txt", bytecode);
+                        File.WriteAllText($"./contracts{subPath}/{address}.txt", bytecode);
                         bcIndex++;
                     }
                 }
@@ -152,17 +152,14 @@ namespace NethereumSample
                     lock(LockSem) {
                         foreach(var pair in deployedContracts) {
                             string address = TxReceipts[pair.idx].ContractAddress;
-                            File.WriteAllText($"./results/{address}.txt", $"Block : {i} Contract : {TxReceipts[pair.idx].ContractAddress} Code : {pair.HexCode}");
+                            File.WriteAllText($"./results{subPath}/{address}.txt", $"Block : {i} Contract : {TxReceipts[pair.idx].ContractAddress} Code : {pair.HexCode}");
                         }
                     }
                 }
 
                 HandledBlocks.AddOrUpdate(i, failedTheFilter, (k, v) => failedTheFilter);
+                TempLogSink[0].Add($"Block-{i}-{failedTheFilter}-rcts:{TxReceipts.Length}-cntcts:{deployedContracts.Count}");
 
-                lock(ProgressStream) {
-                    ProgressStream.WriteLine($"Block-{i}-{failedTheFilter}-rcts:{TxReceipts.Length}-cntcts:{deployedContracts.Count}");
-                    ProgressStream.Flush();
-                }
                 return failedTheFilter;
             };
 
@@ -172,7 +169,8 @@ namespace NethereumSample
                 } catch(Exception e) {
                     Console.WriteLine($"Error on block {i} : {e.Message} - {retries} retries left");
                     if(retries == 1) {
-                        throw;
+                        TempLogSink[0].Add($"Block-{i}-Error-{e.Message}");
+                        FailedBlocks.Add(i);
                     }
                     retries--;
                 }
@@ -181,25 +179,37 @@ namespace NethereumSample
         }
 
         static async Task<bool> HandleBlockBatch(BigInteger[] batch, bool force, int retries) {
-            Console.WriteLine("Started Handling batch: " + batch.First() + " - " + batch.Last());
+            string batchName(BigInteger[] batch) => batch.First() + "_" + batch.Last();
+            ConcurrentBag<string>[] LogSinks = new ConcurrentBag<string>[2];
+            LogSinks[0] = new ConcurrentBag<string>();
+            LogSinks[1] = new ConcurrentBag<string>();
+
+            Console.WriteLine("Started Handling batch: " + batchName(batch));
             foreach(BigInteger[] chunk in batch.Chunk(Size.OfSubBatch)) {
                 var results = await Task.WhenAll(chunk.Select(async j => {
-                    try {
-                        var result = await HandleBlockNumber(j,  force, retries);
-                        if(result ?? false) {
-                            return true;
-                        }
-                    } catch(Exception e) {
-                        lock(ErrorStream){
-                            ErrorStream.WriteLine($"{j}-{e.Message}");
-                            ErrorStream.Flush();
-                        }
-                        FailedBlocks.Add(j);
+                    var result = await HandleBlockNumber(new[] {batchName(batch), batchName(chunk)}, j,  force, retries, LogSinks);
+                    if(result ?? false) {
+                        return true;
                     }
                     return false;
                 }));
             }
-            Console.WriteLine("Done Handling batch: " + batch.First() + " - " + batch.Last());
+
+            lock (LockSem)
+            {
+                foreach (var log in LogSinks[0])
+                {
+                    ProgressStream.WriteLine(log);
+                }
+                foreach (var log in LogSinks[1])
+                {
+                    ErrorStream.WriteLine(log);
+                }
+                ErrorStream.Flush();
+                ProgressStream.Flush();
+            }
+
+            Console.WriteLine("Done Handling batch: " + batchName(batch));
             return false;
         }
     }
@@ -216,5 +226,34 @@ namespace NethereumSample
             stream.Read(bytes, 0, bytes.Length);
             return Encoding.UTF8.GetString(bytes).Split("\n");
         }
+
+        public static string SetupSubFolder(string[] targetFolders, params string[] nestedPath) {
+            string GetOrderPath(string folder, int order, params string[] subfolders) {
+                string path = folder;
+                for(int i = 0; i < order; i++) {
+                    path += "/" + subfolders[i];
+                }
+                return path;
+            }
+
+            if(nestedPath.Length == 0) {
+                foreach(string folder in targetFolders) {
+                    if(!Directory.Exists(folder)) {
+                        Directory.CreateDirectory(folder);
+                    }
+                } 
+            }
+            foreach (var file in targetFolders)
+            {
+                for(int i = 0; i < 3; i++) {
+                    string path = GetOrderPath(file, i, nestedPath);
+                    if(!Directory.Exists(path)) {
+                        Directory.CreateDirectory(path);
+                    }
+                }
+            }
+
+            return GetOrderPath(string.Empty, 3, nestedPath);
+        } 
     }
 }
