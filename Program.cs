@@ -237,23 +237,17 @@ namespace NethereumSample
                 }
                 return path;
             }
+
             if(!ignoreChecks) {
                 if(nestedPath.Length == 0) {
                     foreach(string folder in targetFolders) {
-                        if(!Directory.Exists(folder)) {
-                            Directory.CreateDirectory(folder);
-                        }
+                        Directory.CreateDirectory(folder);
                     } 
                 }
 
                 foreach (var file in targetFolders)
                 {
-                    for(int i = 0; i < nestedPath.Length; i++) {
-                        string path = GetOrderPath(file, i, nestedPath);
-                        if(!Directory.Exists(path)) {
-                            Directory.CreateDirectory(path);
-                        }
-                    }
+                    Directory.CreateDirectory(GetOrderPath(file, nestedPath.Length, nestedPath));
                 }
             }
 
