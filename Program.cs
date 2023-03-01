@@ -46,7 +46,7 @@ namespace NethereumSample
                 await Task.WhenAll(
                     Task.Run(() => {
                         ErrorStream.ReadAllLines().Where(line => !String.IsNullOrWhiteSpace(line))
-                            .Select(line => line.Split('-')[0])
+                            .Select(line => line.Split('-')[1])
                             .Select(BigInteger.Parse)
                             .ToList().ForEach(FailedBlocks.Add);
                     }),
