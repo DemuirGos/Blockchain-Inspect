@@ -184,10 +184,9 @@ namespace NethereumSample
 
             Console.WriteLine("Started Handling batch: " + batchName(batch));
             foreach(BigInteger[] chunk in batch.Chunk(Size.OfSubBatch)) {
-                await Extensions.SetupSubFolder(LogFolders, false, batchName(batch), batchName(chunk));
+                string subPath = await Extensions.SetupSubFolder(LogFolders, false, batchName(batch), batchName(chunk));
 
                 var results = await Task.WhenAll(chunk.Select(async j => {
-                    string subPath = await Extensions.SetupSubFolder(LogFolders, true, batchName(batch), batchName(chunk), j.ToString());
                     var result = await HandleBlockNumber(subPath, j,  force, retries, LogSinks);
                     if(result ?? false) {
                         return true;
