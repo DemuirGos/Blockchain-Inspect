@@ -169,7 +169,7 @@ namespace NethereumSample
                 } catch(Exception e) {
                     Console.WriteLine($"Error on block {i} : {e.Message} - {retries} retries left");
                     if(retries == 1) {
-                        TempLogSink[0].Add($"Block-{i}-Error-{e.Message}");
+                        TempLogSink[1].Add($"Block-{i}-Error-{e.Message}");
                         FailedBlocks.Add(i);
                     }
                     retries--;
