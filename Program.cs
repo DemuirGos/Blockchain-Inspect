@@ -102,13 +102,19 @@ namespace NethereumSample
 
         static async Task<bool?> HandleBlockNumber(BigInteger i, bool force, int retries) {
             Func<Task<bool?>> process = async () => {
+                Console.Write("\tHandling block " + i + " ");
                 if(HandledBlocks.ContainsKey(i)) {
+                    Console.WriteLine("Block already handled");
                     return HandledBlocks[i];
                 }
 
                 if(!force && FailedBlocks.Contains(i)) {
+                    if(!force) {
+                        Console.WriteLine("Block already failed (pass)");
+                    }
                     return null;
                 }
+                Console.WriteLine("Starting block handling");
 
 
                 await Task.Delay(System.Random.Shared.Next(0, 1000));
@@ -183,7 +189,7 @@ namespace NethereumSample
         }
 
         static async Task<bool> HandleBlockBatch(BigInteger[] batch, bool force, int retries) {
-            Console.WriteLine("Handling batch: " + batch.First() + " - " + batch.Last());
+            Console.WriteLine("Started Handling batch: " + batch.First() + " - " + batch.Last());
             foreach(BigInteger[] chunk in batch.Chunk(Size.OfSubBatch)) {
                 var results = await Task.WhenAll(chunk.Select(async j => {
                     try {
@@ -201,7 +207,7 @@ namespace NethereumSample
                     return false;
                 }));
             }
-            Console.WriteLine("Handling batch: " + batch.First() + " - " + batch.Last());
+            Console.WriteLine("Done Handling batch: " + batch.First() + " - " + batch.Last());
             return false;
         }
     }
