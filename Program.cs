@@ -98,10 +98,8 @@ namespace NethereumSample
             }
         }
 
-        static async Task<bool?> HandleBlockNumber(string[] path, BigInteger i, bool force, int retries, ConcurrentBag<string>[] TempLogSink) {
+        static async Task<bool?> HandleBlockNumber(string subPath, BigInteger i, bool force, int retries, ConcurrentBag<string>[] TempLogSink) {
             Func<Task<bool?>> process = async () => {
-                string subPath =  await Extensions.SetupSubFolder(LogFolders, path[0], path[1], i.ToString());
-
                 if(HandledBlocks.ContainsKey(i)) {
                     return HandledBlocks[i];
                 }
@@ -186,8 +184,12 @@ namespace NethereumSample
 
             Console.WriteLine("Started Handling batch: " + batchName(batch));
             foreach(BigInteger[] chunk in batch.Chunk(Size.OfSubBatch)) {
+                foreach(var j in chunk)
+                    await Extensions.SetupSubFolder(LogFolders, false, batchName(batch), batchName(chunk), j.ToString());
+
                 var results = await Task.WhenAll(chunk.Select(async j => {
-                    var result = await HandleBlockNumber(new[] {batchName(batch), batchName(chunk)}, j,  force, retries, LogSinks);
+                    string subPath = await Extensions.SetupSubFolder(LogFolders, true, batchName(batch), batchName(chunk), j.ToString());
+                    var result = await HandleBlockNumber(subPath, j,  force, retries, LogSinks);
                     if(result ?? false) {
                         return true;
                     }
@@ -227,7 +229,7 @@ namespace NethereumSample
             return Encoding.UTF8.GetString(bytes).Split("\n");
         }
 
-        public static Task<string> SetupSubFolder(string[] targetFolders, params string[] nestedPath) {
+        public static Task<string> SetupSubFolder(string[] targetFolders, bool ignoreChecks = false, params string[] nestedPath) {
             string GetOrderPath(string folder, int order, params string[] subfolders) {
                 string path = folder;
                 for(int i = 0; i < order; i++) {
@@ -235,21 +237,22 @@ namespace NethereumSample
                 }
                 return path;
             }
+            if(!ignoreChecks) {
+                if(nestedPath.Length == 0) {
+                    foreach(string folder in targetFolders) {
+                        if(!Directory.Exists(folder)) {
+                            Directory.CreateDirectory(folder);
+                        }
+                    } 
+                }
 
-            if(nestedPath.Length == 0) {
-                foreach(string folder in targetFolders) {
-                    if(!Directory.Exists(folder)) {
-                        Directory.CreateDirectory(folder);
-                    }
-                } 
-            }
-
-            foreach (var file in targetFolders)
-            {
-                for(int i = 0; i < nestedPath.Length; i++) {
-                    string path = GetOrderPath(file, i, nestedPath);
-                    if(!Directory.Exists(path)) {
-                        Directory.CreateDirectory(path);
+                foreach (var file in targetFolders)
+                {
+                    for(int i = 0; i < nestedPath.Length; i++) {
+                        string path = GetOrderPath(file, i, nestedPath);
+                        if(!Directory.Exists(path)) {
+                            Directory.CreateDirectory(path);
+                        }
                     }
                 }
             }
