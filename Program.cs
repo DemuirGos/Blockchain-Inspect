@@ -56,6 +56,9 @@ namespace NethereumSample
                     })
                 );
                 
+                Directory.CreateDirectory("receipts");
+                Directory.CreateDirectory("contracts");
+                Directory.CreateDirectory("results");
             }catch(Exception e) {
                 Console.WriteLine(e.StackTrace);
                 throw;
@@ -117,7 +120,7 @@ namespace NethereumSample
                 
                 lock(LockSem) {
                     foreach(var receipt in TxReceipts) {
-                        File.WriteAllText($"./contracts/{receipt.TransactionHash}.txt", System.Text.Json.JsonSerializer.Serialize(receipt));
+                        File.WriteAllText($"./receipts/{receipt.TransactionHash}.txt", System.Text.Json.JsonSerializer.Serialize(receipt));
                     }
                 }
                 
@@ -150,7 +153,6 @@ namespace NethereumSample
                     lock(LockSem) {
                         foreach(var pair in deployedContracts) {
                             string address = TxReceipts[pair.idx].ContractAddress;
-                            File.WriteAllText($"./contracts/{address}.txt", pair.HexCode);
                             File.WriteAllText($"./results/{address}.txt", $"Block : {i} Contract : {TxReceipts[pair.idx].ContractAddress} Code : {pair.HexCode}");
                         }
                     }
