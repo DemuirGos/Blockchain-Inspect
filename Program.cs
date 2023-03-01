@@ -102,22 +102,15 @@ namespace NethereumSample
 
         static async Task<bool?> HandleBlockNumber(BigInteger i, bool force, int retries) {
             Func<Task<bool?>> process = async () => {
-                Console.Write("\tHandling block " + i + " ");
                 if(HandledBlocks.ContainsKey(i)) {
-                    Console.WriteLine("Block already handled");
                     return HandledBlocks[i];
                 }
 
                 if(!force && FailedBlocks.Contains(i)) {
-                    if(!force) {
-                        Console.WriteLine("Block already failed (pass)");
-                    }
                     return null;
                 }
-                Console.WriteLine("Starting block handling");
 
 
-                await Task.Delay(System.Random.Shared.Next(0, 1000));
                 BlockWithTransactions block = await web3.Eth.Blocks.GetBlockWithTransactionsByNumber.SendRequestAsync(new BlockParameter(i.ToHexBigInteger()));
                         // get the receipts of the create transactions
                 var TxReceipts = await Task.WhenAll(
@@ -177,12 +170,11 @@ namespace NethereumSample
                 try {
                     return await process();
                 } catch(Exception e) {
-                    Console.WriteLine($"Error handling block {i}: {e.Message}");                    
-                    if(retries == 0) {
+                    Console.WriteLine($"Error on block {i} : {e.Message} - {retries} retries left");
+                    if(retries == 1) {
                         throw;
                     }
                     retries--;
-                    await Task.Delay(1000);
                 }
             }
             return null;
