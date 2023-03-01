@@ -56,7 +56,7 @@ namespace NethereumSample
                     })
                 );
                 
-                Extensions.SetupSubFolder(LogFolders);
+                await Extensions.SetupSubFolder(LogFolders);
             }catch(Exception e) {
                 Console.WriteLine(e.StackTrace);
                 throw;
@@ -100,7 +100,7 @@ namespace NethereumSample
 
         static async Task<bool?> HandleBlockNumber(string[] path, BigInteger i, bool force, int retries, ConcurrentBag<string>[] TempLogSink) {
             Func<Task<bool?>> process = async () => {
-                string subPath =  Extensions.SetupSubFolder(LogFolders, path[0], path[1], i.ToString());
+                string subPath =  await Extensions.SetupSubFolder(LogFolders, path[0], path[1], i.ToString());
 
                 if(HandledBlocks.ContainsKey(i)) {
                     return HandledBlocks[i];
@@ -227,7 +227,7 @@ namespace NethereumSample
             return Encoding.UTF8.GetString(bytes).Split("\n");
         }
 
-        public static string SetupSubFolder(string[] targetFolders, params string[] nestedPath) {
+        public static Task<string> SetupSubFolder(string[] targetFolders, params string[] nestedPath) {
             string GetOrderPath(string folder, int order, params string[] subfolders) {
                 string path = folder;
                 for(int i = 0; i < order; i++) {
@@ -254,7 +254,7 @@ namespace NethereumSample
                 }
             }
 
-            return GetOrderPath(string.Empty, nestedPath.Length, nestedPath);
+            return Task.FromResult(GetOrderPath(string.Empty, nestedPath.Length, nestedPath));
         } 
     }
 }
