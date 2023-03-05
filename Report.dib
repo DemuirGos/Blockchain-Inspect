@@ -1,0 +1,123 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"name":"csharp","aliases":[]}]}}
+
+#!markdown
+
+# Report :
+
+    Conflicts Found with Eip 170
+
+#!fsharp
+
+type Eip = Eip of int
+type Report = {
+    Eip : Eip
+    Conflict : bool
+}
+
+type Contract = {
+    Block : Int64
+    Address : string
+    Code : byte array
+    Results : Report list
+}
+
+#!fsharp
+
+let files = Directory.GetFiles("./results", "*.txt")
+let eips = [ Eip(170); Eip(3540) ]
+
+#!fsharp
+
+type Target = Cell | Csv
+let printResult eips results target = 
+    let compat (bytecode : byte array) = sprintf "0x%s...<%d bytes left>" (Convert.ToHexString(bytecode)[..123]) (bytecode.Length - 123)
+    let shouldCount eip contract  = 
+        contract.Results |> List.filter (fun r -> r.Eip = eip && r.Conflict = true) |> List.length > 0 
+    let rec loop eips contracts reports = 
+        match eips with
+        | [] -> reports
+        | eip::rest -> 
+            let countOfEipInResults = contracts |> List.filter (shouldCount eip) |> List.length
+            let message = sprintf "number of conflicts found with Eip:%A is %A" eip countOfEipInResults
+            loop rest results (message::reports)
+
+    do 
+        loop  eips results []
+        |> List.iter Console.WriteLine
+    match target with
+    | Cell ->
+        (results |> List.map (fun c -> 
+            {|
+                Block = c.Block
+                Address = c.Address
+                Code = compat c.Code
+                Results = c.Results |> List.filter (fun r -> r.Conflict = true)
+            |}
+        )).Display() |> ignore
+    | Csv -> 
+        let header = "Block,Address,Code,Results"
+        let row c = 
+            let results = c.Results |> List.filter (fun r -> r.Conflict = true)
+            sprintf "%A,%A,%A,%A" c.Block c.Address (compat c.Code) (results |> List.map (fun r -> r.Eip))
+        let rows = 
+            header :: (results |> List.map row)
+            |> String.concat "\n"
+        // print to file
+        File.WriteAllText("./results.csv", rows)
+
+#!fsharp
+
+let conflictWithEip eips contract =
+    let checkEip170 contract = contract.Code.Length > 0x6000
+    let checkEip3540 contract = contract.Code.[0] = (byte)0xef && contract.Code.[1] = (byte)0x00
+
+    let rec loop targets contract reports = 
+        match targets with
+        | [] -> reports
+        | target :: rest ->
+            let report = 
+                match target with
+                | Eip(170) as eip -> Some <| { Eip = eip; Conflict = checkEip170 contract }
+                | Eip(3540) as eip -> Some <| { Eip = eip; Conflict = checkEip3540 contract }
+                | _ -> None
+
+            match report with
+            | Some report -> loop rest contract (report::reports)
+            | None -> loop rest contract reports
+
+    {
+        contract with Results = loop eips contract []
+    }
+
+#!fsharp
+
+let parseLine (line : string) = 
+    // Block : {Block} Contract : {Address} Code : {Code}
+    let tokens = line.Split([|' '|], StringSplitOptions.RemoveEmptyEntries)
+    {
+        Block = Int64.Parse(tokens.[2])
+        Address = tokens.[5]
+        Code = Convert.FromHexString(tokens.[8][2..])
+        Results = []
+    }
+
+#!fsharp
+
+let contracts = 
+    files 
+    |> Seq.map File.ReadAllText
+    |> Seq.map parseLine
+
+#!fsharp
+
+let results = 
+    contracts 
+    |> Seq.map (conflictWithEip eips)
+    |> Seq.toList
+    
+
+#!fsharp
+
+printResult eips results Target.Csv

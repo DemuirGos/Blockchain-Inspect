@@ -26,7 +26,7 @@ namespace NethereumSample
         };
 
         static readonly Web3 web3 = new Nethereum.Web3.Web3("http://127.0.0.1:8545");
-        static (int OfBatch, int OfSubBatch) Size = (10000, 1000);
+        static (int OfBatch, int OfSubBatch) Size = (100000, 10000);
         static Stopwatch timer = new Stopwatch();
         static ConcurrentBag<BigInteger> FailedBlocks = new();
         static ConcurrentDictionary<BigInteger, bool> HandledBlocks = new();
@@ -44,15 +44,20 @@ namespace NethereumSample
         static async Task Setup() {
             try {
                 await Task.WhenAll(
-                    Task.Run(() => {
-                        ErrorStream.ReadAllLines().Where(line => !String.IsNullOrWhiteSpace(line))
-                            .Select(line => line.Split('-')[1])
-                            .Select(BigInteger.Parse)
-                            .ToList().ForEach(FailedBlocks.Add);
+                    Task.Run(async () => {
+                        await foreach (var line in ErrorStream.ReadLine())
+                        {
+                            if(String.IsNullOrWhiteSpace(line)) continue;
+                            var lineSplit = line.Split('-');
+                            FailedBlocks.Add(BigInteger.Parse(lineSplit[1]));
+                        }
                     }),
-                    Task.Run(() => {
-                        ProgressStream.ReadAllLines().Where(line => !String.IsNullOrWhiteSpace(line)).Select(line => line.Split('-')).ToList()
-                            .ForEach(line => HandledBlocks.TryAdd(BigInteger.Parse(line[1]), bool.Parse(line[2])));
+                    Task.Run(async () => {
+                        await foreach (var line in ProgressStream.ReadLine())
+                        {
+                            var lineSplit = line.Split('-');
+                            HandledBlocks.TryAdd(BigInteger.Parse(lineSplit[1]), bool.Parse(lineSplit[2]));
+                        }
                     })
                 );
                 
@@ -69,26 +74,21 @@ namespace NethereumSample
                 await Setup();
 
                 int BlockchainHeight = (int)(await web3.Eth.Blocks.GetBlockNumber.SendRequestAsync()).Value;
-                var failedTheChecks = false;
 
                 Console.WriteLine("Handling first pass blocks");
                 foreach(var block_batch in Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i).Chunk(Size.OfBatch))
-                    failedTheChecks |= await HandleBlockBatch(block_batch, false, 20);
+                    await HandleBlockBatch(block_batch, false, 20);
                 Console.WriteLine("Handling first pass blocks");
 
                 Console.WriteLine("Handling failed blocks");
                 foreach(var failed_batch in FailedBlocks.Chunk(Size.OfBatch))
-                    failedTheChecks |= await HandleBlockBatch(failed_batch, true, -1);
+                    await HandleBlockBatch(failed_batch, true, -1, false);
                 Console.WriteLine("Done handling failed blocks");
 
                 Console.WriteLine("Handling ignored blocks");
                 foreach(var correction_batch in Enumerable.Range(0, BlockchainHeight).Select(i => (BigInteger)i).Except(HandledBlocks.Keys).Chunk(Size.OfBatch))
-                    failedTheChecks |= await HandleBlockBatch(correction_batch, true, -1);
+                    await HandleBlockBatch(correction_batch, true, -1, false);
                 Console.WriteLine("Done handling ignored blocks");
-
-                string message = failedTheChecks ? "Eip:[3540-170] conflicts found" : "No conflicts found";
-                Console.WriteLine(message);
-                File.WriteAllText("found.txt", message);
             } catch(Exception e) {
                 Console.WriteLine(e.Message);
                 throw;
@@ -98,14 +98,14 @@ namespace NethereumSample
             }
         }
 
-        static async Task<bool?> HandleBlockNumber(string subPath, BigInteger i, bool force, int retries, ConcurrentBag<string>[] TempLogSink) {
-            Func<Task<bool?>> process = async () => {
+        static async Task HandleBlockNumber(string subPath, BigInteger i, bool force, int retries, ConcurrentBag<string>[] TempLogSink) {
+            Func<Task> process = async () => {
                 if(HandledBlocks.ContainsKey(i)) {
-                    return HandledBlocks[i];
+                    return;
                 }
 
                 if(!force && FailedBlocks.Contains(i)) {
-                    return null;
+                    return;
                 }
 
                 
@@ -115,11 +115,11 @@ namespace NethereumSample
                     block.Transactions
                         .Select(tx => web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(tx.TransactionHash)).ToArray()); // get the receipt of the create transaction
                 
-                lock(LockSem) {
-                    foreach(var receipt in TxReceipts) {
-                        File.WriteAllText($"./receipts{subPath}/{receipt.TransactionHash}.txt", System.Text.Json.JsonSerializer.Serialize(receipt));
-                    }
-                }
+                // lock(LockSem) {
+                //     foreach(var receipt in TxReceipts) {
+                //         File.WriteAllText($"./receipts{subPath}/{receipt.TransactionHash}.txt", System.Text.Json.JsonSerializer.Serialize(receipt));
+                //     }
+                // }
                 
                 // get the bytecode of the deployed contracts
                 var deployedContractsBytecode = await Task.WhenAll(
@@ -156,43 +156,40 @@ namespace NethereumSample
                 }
 
                 HandledBlocks.AddOrUpdate(i, failedTheFilter, (k, v) => failedTheFilter);
-                TempLogSink[0].Add($"Block-{i}-{failedTheFilter}-rcts:{TxReceipts.Length}-cntcts:{deployedContracts.Count}");
-
-                return failedTheFilter;
-            };
-
+                TempLogSink[0].Add($"Block-{i}-{failedTheFilter}-::filter_result:{failedTheFilter}-receipts_count:{TxReceipts.Length}-contracts_deployed:{deployedContracts.Count}");
+            };  
             while(retries != 0) {
                 try {
-                    return await process();
+                    await process();
+		    return;
                 } catch(Exception e) {
                     Console.WriteLine($"Error on block {i} : {e.Message} - {retries} retries left");
                     if(retries == 1) {
-                        TempLogSink[1].Add($"Block-{i}-Error-{e.Message}");
+                        TempLogSink[1].Add($"Block-{i}-failed-:: failure_error:{e.Message}");
                         FailedBlocks.Add(i);
                     }
                     retries--;
                 }
             }
-            return null;
         }
 
-        static async Task<bool> HandleBlockBatch(BigInteger[] batch, bool force, int retries) {
+        static async Task HandleBlockBatch(BigInteger[] batch, bool force, int retries, bool isAsync = true) {
             string batchName(BigInteger[] batch) => batch.First() + "_" + batch.Last();
             ConcurrentBag<string>[] LogSinks = new ConcurrentBag<string>[2];
             LogSinks[0] = new ConcurrentBag<string>();
             LogSinks[1] = new ConcurrentBag<string>();
-
             Console.WriteLine("Started Handling batch: " + batchName(batch));
             foreach(BigInteger[] chunk in batch.Chunk(Size.OfSubBatch)) {
-                string subPath = await Extensions.SetupSubFolder(LogFolders, false, batchName(batch), batchName(chunk));
-
-                var results = await Task.WhenAll(chunk.Select(async j => {
-                    var result = await HandleBlockNumber(subPath, j,  force, retries, LogSinks);
-                    if(result ?? false) {
-                        return true;
-                    }
-                    return false;
-                }));
+                string subPath = String.Empty; // await Extensions.SetupSubFolder(LogFolders, false, batchName(batch), batchName(chunk));
+		if(isAsync) {
+                	await Task.WhenAll(chunk.Select(async j => {
+                    		await HandleBlockNumber(subPath, j,  force, retries, LogSinks);
+                	}));
+		} else {
+			foreach(var block in chunk) {
+		 		await HandleBlockNumber(subPath, block, force, retries, LogSinks);
+			}
+		}
             }
 
             lock (LockSem)
@@ -210,11 +207,25 @@ namespace NethereumSample
             }
 
             Console.WriteLine("Done Handling batch: " + batchName(batch));
-            return false;
         }
     }
 
     public static class Extensions {
+        public static async IAsyncEnumerable<string> ReadLine(this FileStream stream) {
+            while(stream.Position < stream.Length) {
+                var b = stream.ReadByte();
+                if(b == -1) {
+                    yield break;
+                }
+                var line = new List<byte>();
+                while(b != -1 && b != '\n') {
+                    line.Add((byte)b);
+                    b = stream.ReadByte();
+                }
+                yield return Encoding.UTF8.GetString(line.ToArray());
+            }
+        }
+
         public static void WriteLine(this FileStream stream, string line) {
             var bytes = Encoding.UTF8.GetBytes(line + "\n");
             stream.Seek(0, SeekOrigin.End);
